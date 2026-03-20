@@ -1,5 +1,5 @@
 // api/humelo-tts.js — Humelo DIVE TTS 프록시
-// 1단계: text → signature, 2단계: signature → WAV audio
+// POST /api/tts/dive → { url, duration, format }
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
@@ -19,65 +19,43 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { text, actor = 'Ju-yeong', language = 'kor', speed = 1.0 } = req.body || {};
+    const { text, speed = 1.0, pitch = 0.0, volume = 50, mode = 'preset', lang = 'ko', dictionaryId } = req.body || {};
 
     if (!text) {
       return res.status(400).json({ error: 'text is required' });
     }
 
-    // 1단계: 음성 생성 요청 → signature
-    const genRes = await fetch('https://api.prosody-tts.com/api/ttsapi/voice-generation/', {
+    const body = { text, mode, lang, speed, pitch, volume };
+    if (dictionaryId) body.dictionaryId = dictionaryId;
+
+    console.log('[humelo-tts] request:', { text: text.substring(0, 50), lang, speed });
+
+    const ttsRes = await fetch('https://console.prosody.dev/api/tts/dive', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Api-Key ${HUMELO_API_KEY}`
+        'X-API-Key': HUMELO_API_KEY
       },
-      body: JSON.stringify({
-        text,
-        actor,
-        language,
-        overall_speed: speed
-      })
+      body: JSON.stringify(body)
     });
 
-    if (!genRes.ok) {
-      const err = await genRes.text();
-      return res.status(genRes.status).json({ error: 'Humelo generation error', details: err });
+    if (!ttsRes.ok) {
+      const err = await ttsRes.text();
+      console.error('[humelo-tts] error:', ttsRes.status, err);
+      return res.status(ttsRes.status).json({ error: 'Humelo TTS error', status: ttsRes.status, details: err });
     }
 
-    const genData = await genRes.json();
-    const signature = genData.signature;
-
-    if (!signature) {
-      return res.status(500).json({ error: 'No signature returned', data: genData });
-    }
-
-    // 2단계: 음성 추출 → WAV binary
-    const audioRes = await fetch(`https://api.prosody-tts.com/api/ttsapi/voice-generation/${signature}/generate/`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Api-Key ${HUMELO_API_KEY}`
-      }
-    });
-
-    if (!audioRes.ok) {
-      const err = await audioRes.text();
-      return res.status(audioRes.status).json({ error: 'Humelo audio error', details: err });
-    }
-
-    // WAV 바이너리를 base64로 변환하여 전달
-    const audioBuffer = await audioRes.arrayBuffer();
-    const base64Audio = Buffer.from(audioBuffer).toString('base64');
-
-    const duration = audioRes.headers.get('Voice-Duration') || '0';
+    const data = await ttsRes.json();
+    console.log('[humelo-tts] success:', { url: !!data.url, duration: data.duration, format: data.format });
 
     res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(200).json({
-      audio: base64Audio,
-      duration: parseFloat(duration),
-      signature
+      audioUrl: data.url,
+      duration: data.duration,
+      format: data.format || 'mp3'
     });
   } catch (error) {
+    console.error('[humelo-tts] exception:', error.message);
     return res.status(500).json({ error: error.message });
   }
 }

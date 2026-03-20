@@ -1931,15 +1931,14 @@ async function stsProcessInput(text) {
       const ttsRes = await fetch('/api/humelo-tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: ttsText, actor: 'Ju-yeong', speed: 1.05 })
+        body: JSON.stringify({ text: ttsText, speed: 1.05 })
       });
       const ttsData = await ttsRes.json();
 
-      if (ttsData.audio) {
-        // base64 WAV → Audio 재생
-        const audioSrc = 'data:audio/wav;base64,' + ttsData.audio;
+      if (ttsData.audioUrl) {
+        // Humelo DIVE → URL로 Audio 재생
         if (!window._stsAudio) window._stsAudio = new Audio();
-        window._stsAudio.src = audioSrc;
+        window._stsAudio.src = ttsData.audioUrl;
         window._stsAudio.onended = () => {
           stsSpeaking = false;
           stsProcessing = false;
