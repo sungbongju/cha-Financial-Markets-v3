@@ -30,7 +30,7 @@ export default async function handler(req, res) {
 
     console.log('[humelo-tts] request:', { text: text.substring(0, 50), lang, speed });
 
-    const ttsRes = await fetch('https://console.prosody.dev/api/tts/dive', {
+    const ttsRes = await fetch('https://api.prosody.dev/v1/tts/dive', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -46,13 +46,13 @@ export default async function handler(req, res) {
     }
 
     const data = await ttsRes.json();
-    console.log('[humelo-tts] success:', { url: !!data.url, duration: data.duration, format: data.format });
+    console.log('[humelo-tts] success:', { audioUrl: !!data.audioUrl, duration: data.duration, format: data.format });
 
     res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(200).json({
-      audioUrl: data.url,
+      audioUrl: data.audioUrl,
       duration: data.duration,
-      format: data.format || 'mp3'
+      format: data.format || 'wav'
     });
   } catch (error) {
     console.error('[humelo-tts] exception:', error.message);
