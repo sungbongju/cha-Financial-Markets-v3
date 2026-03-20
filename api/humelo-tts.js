@@ -1,5 +1,26 @@
 // api/humelo-tts.js — Humelo DIVE TTS 프록시
-// POST /api/tts/dive → { url, duration, format }
+// Docs: https://console.humelo.com/docs
+
+import https from 'https';
+
+function httpsPost(url, headers, body) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = https.request({
+      hostname: parsed.hostname,
+      path: parsed.pathname,
+      method: 'POST',
+      headers
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve({ status: res.statusCode, body: data }));
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
@@ -19,34 +40,30 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { text, speed = 1.0, pitch = 0.0, volume = 50, mode = 'preset', voiceName = '시아', lang = 'ko', dictionaryId } = req.body || {};
+    const { text, speed = 1.0, pitch = 0.0, volume = 50, voiceName = '시아', emotion = 'neutral', lang = 'ko', dictionaryId } = req.body || {};
 
     if (!text) {
       return res.status(400).json({ error: 'text is required' });
     }
 
-    const body = { text, mode, lang, speed, pitch, volume, voiceName };
+    const body = { text, mode: 'preset', lang, speed, pitch, volume, voiceName, emotion };
     if (dictionaryId) body.dictionaryId = dictionaryId;
 
-    console.log('[humelo-tts] request:', { text: text.substring(0, 50), lang, speed });
+    console.log('[humelo-tts] request:', { text: text.substring(0, 50), voiceName, emotion, lang, speed });
 
-    const ttsRes = await fetch('https://api.prosody.dev/v1/tts/dive', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': HUMELO_API_KEY
-      },
-      body: JSON.stringify(body)
-    });
+    const payload = JSON.stringify(body);
+    const ttsRes = await httpsPost('https://api.prosody.dev/v1/tts/dive', {
+      'Content-Type': 'application/json',
+      'X-API-Key': HUMELO_API_KEY
+    }, payload);
 
-    if (!ttsRes.ok) {
-      const err = await ttsRes.text();
-      console.error('[humelo-tts] error:', ttsRes.status, err);
-      return res.status(ttsRes.status).json({ error: 'Humelo TTS error', status: ttsRes.status, details: err });
+    console.log('[humelo-tts] response status:', ttsRes.status, 'body:', ttsRes.body.substring(0, 200));
+
+    if (ttsRes.status !== 200) {
+      return res.status(ttsRes.status).json({ error: 'Humelo TTS error', status: ttsRes.status, details: ttsRes.body });
     }
 
-    const data = await ttsRes.json();
-    console.log('[humelo-tts] success:', { audioUrl: !!data.audioUrl, duration: data.duration, format: data.format });
+    const data = JSON.parse(ttsRes.body);
 
     res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(200).json({
