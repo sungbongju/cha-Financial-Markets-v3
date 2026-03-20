@@ -19,13 +19,13 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { text, speed = 1.0, pitch = 0.0, volume = 50, mode = 'preset', lang = 'ko', dictionaryId } = req.body || {};
+    const { text, speed = 1.0, pitch = 0.0, volume = 50, mode = 'preset', voiceName = '시아', lang = 'ko', dictionaryId } = req.body || {};
 
     if (!text) {
       return res.status(400).json({ error: 'text is required' });
     }
 
-    const body = { text, mode, lang, speed, pitch, volume };
+    const body = { text, mode, lang, speed, pitch, volume, voiceName };
     if (dictionaryId) body.dictionaryId = dictionaryId;
 
     console.log('[humelo-tts] request:', { text: text.substring(0, 50), lang, speed });
