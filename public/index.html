@@ -2069,6 +2069,10 @@ async function stsProcessInput(text) {
             case 'error':
               console.error('[STS] stream error:', data.message);
               break;
+
+            case 'debug':
+              console.log(`[STS-DEBUG] ${data.type}: ${data.msg}`);
+              break;
           }
         }
       }

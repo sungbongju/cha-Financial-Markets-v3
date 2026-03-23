@@ -76,12 +76,15 @@ function applyTtsPostProcessing(text) {
 }
 
 // ── Humelo TTS 호출 (Streaming → Standard 폴백) ──
-function callHumeloTTS(text, apiKey) {
-  // 스트리밍 우선 시도, 실패 시 Standard 폴백
+function callHumeloTTS(text, apiKey, sendDebug) {
+  // 스트리밍 우선 시도 (3초 제한), 실패 시 Standard 폴백
   return callHumeloStreamingTTS(text, apiKey).then(result => {
-    if (result) return result;
-    console.log('[TTS] Streaming 실패, Standard 폴백');
+    if (result) { if (sendDebug) sendDebug('tts-mode', 'streaming'); return result; }
+    if (sendDebug) sendDebug('tts-fallback', 'streaming→standard');
     return callHumeloStandardTTS(text, apiKey);
+  }).then(result => {
+    if (!result && sendDebug) sendDebug('tts-fail', 'both failed for: ' + text.substring(0, 30));
+    return result;
   });
 }
 
@@ -119,8 +122,8 @@ function callHumeloStreamingTTS(text, apiKey) {
         } catch { resolve(null); }
       });
     });
-    req.on('error', () => resolve(null));
-    req.setTimeout(10000, () => { req.destroy(); resolve(null); });
+    req.on('error', (err) => { console.log('[TTS Streaming] error:', err.message); resolve(null); });
+    req.setTimeout(3000, () => { console.log('[TTS Streaming] timeout 3s'); req.destroy(); resolve(null); });
     req.write(body);
     req.end();
   });
@@ -269,6 +272,9 @@ export default async function handler(req, res) {
   const { message, history = [] } = req.body || {};
   if (!message) return res.status(400).json({ error: 'message is required' });
 
+  // 디버그: API 키 존재 여부 확인
+  console.log('[sts-stream] HUMELO_API_KEY:', HUMELO_API_KEY ? 'SET (' + HUMELO_API_KEY.substring(0, 8) + '...)' : 'NOT SET');
+
   // SSE 헤더 설정
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -320,18 +326,28 @@ export default async function handler(req, res) {
     req.on('close', () => { clientDisconnected = true; });
 
     // 문장 처리 헬퍼
+    // 디버그 SSE 전송 헬퍼
+    const sendDebug = (type, msg) => {
+      console.log(`[sts-debug] ${type}: ${msg}`);
+      if (!clientDisconnected) sendSSE(res, 'debug', { type, msg });
+    };
+
     function processSentence(sentence) {
       if (!sentence || sentence.length === 0) return;
       sendSSE(res, 'text', { sentence, index: sentenceIndex });
       if (HUMELO_API_KEY) {
         const idx = sentenceIndex;
         const ttsText = applyTtsPostProcessing(sentence);
-        const p = callHumeloTTS(ttsText, HUMELO_API_KEY).then(audioUrl => {
+        sendDebug('tts-start', `[${idx}] "${ttsText.substring(0, 30)}..."`);
+        const p = callHumeloTTS(ttsText, HUMELO_API_KEY, sendDebug).then(audioUrl => {
+          sendDebug('tts-result', `[${idx}] ${audioUrl ? (audioUrl.startsWith('data:') ? 'streaming OK (' + Math.round(audioUrl.length/1024) + 'KB)' : 'standard OK') : 'FAILED'}`);
           if (!clientDisconnected && audioUrl) {
             sendSSE(res, 'audio', { audioUrl, index: idx });
           }
-        }).catch(() => {});
+        }).catch((err) => { sendDebug('tts-error', `[${idx}] ${err.message}`); });
         ttsPromises.push(p);
+      } else {
+        sendDebug('tts-skip', 'HUMELO_API_KEY not set');
       }
       sentenceIndex++;
     }
