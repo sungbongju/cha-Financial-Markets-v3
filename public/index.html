@@ -1957,29 +1957,29 @@ const TTS_CACHE = {
     });
   },
 
-  _makeKey(text) {
-    // 간단한 해시: 앞 100자 + 길이 (같은 답변 매칭용)
-    return (text || '').trim().substring(0, 100) + ':' + text.length;
+  _makeKey(question) {
+    // 사용자 질문 기반 키 (같은 질문 → 캐시 히트)
+    return (question || '').trim().toLowerCase().replace(/\s+/g, ' ');
   },
 
-  async get(text) {
+  async get(question) {
     await this.init();
     if (!this.db) return null;
-    const key = this._makeKey(text);
+    const key = this._makeKey(question);
     return new Promise((resolve) => {
       const tx = this.db.transaction(this.storeName, 'readonly');
       const req = tx.objectStore(this.storeName).get(key);
-      req.onsuccess = () => resolve(req.result?.audioUrl || null);
+      req.onsuccess = () => resolve(req.result || null);
       req.onerror = () => resolve(null);
     });
   },
 
-  async set(text, audioUrl) {
+  async set(question, reply, audioUrl) {
     await this.init();
     if (!this.db || !audioUrl) return;
-    const key = this._makeKey(text);
+    const key = this._makeKey(question);
     const tx = this.db.transaction(this.storeName, 'readwrite');
-    tx.objectStore(this.storeName).put({ key, audioUrl, ts: Date.now() });
+    tx.objectStore(this.storeName).put({ key, reply, audioUrl, ts: Date.now() });
   }
 };
 
@@ -1995,15 +1995,15 @@ function playWebSpeechTTS(text, onEnd) {
 }
 
 // ── Humelo TTS 백그라운드 호출 + 캐시 저장 ──
-function fetchHumeloBackground(text) {
+function fetchHumeloBackground(question, reply) {
   fetch('/api/humelo-tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, speed: 1.05, voiceName: '시아' })
+    body: JSON.stringify({ text: reply, speed: 1.05, voiceName: '시아' })
   }).then(r => r.json()).then(d => {
     if (d.audioUrl) {
-      TTS_CACHE.set(text, d.audioUrl);
-      console.log('[STS] Humelo 캐시 저장 완료:', text.substring(0, 30));
+      TTS_CACHE.set(question, reply, d.audioUrl);
+      console.log('[STS] Humelo 캐시 저장 완료 (질문:', question.substring(0, 20), ')');
     }
   }).catch(e => console.warn('[STS] Humelo 백그라운드 실패:', e.message));
 }
@@ -2154,17 +2154,18 @@ async function stsProcessInput(text) {
       stsStartRecognition();
     };
 
-    const cachedAudio = await TTS_CACHE.get(reply);
-    if (cachedAudio) {
+    const cached = await TTS_CACHE.get(text);
+    if (cached && cached.audioUrl) {
       // 캐시 히트! → Humelo 고품질 음성 즉시 재생
       console.log('[STS] ★ 캐시 히트! Humelo 즉시 재생');
       window._stsAudioQueue.onAllDone = stsFinish;
-      window._stsAudioQueue.add(cachedAudio);
+      window._stsAudioQueue.add(cached.audioUrl);
+      // 캐시된 답변으로 버블도 업데이트 (더 정확한 답변일 수 있음)
     } else {
       // 캐시 미스 → Web Speech 즉시 재생 + Humelo 백그라운드 캐시
       console.log('[STS] 캐시 미스 → Web Speech 즉시 + Humelo 백그라운드');
       playWebSpeechTTS(reply, stsFinish);
-      fetchHumeloBackground(reply);
+      fetchHumeloBackground(text, reply);
     }
 
   } catch (err) {
