@@ -1980,6 +1980,52 @@ const TTS_CACHE = {
     const key = this._makeKey(question);
     const tx = this.db.transaction(this.storeName, 'readwrite');
     tx.objectStore(this.storeName).put({ key, reply, audioUrl, ts: Date.now() });
+  },
+
+  // 사전 생성 캐시 로드 (manifest.json → IndexedDB)
+  async loadPreCache() {
+    try {
+      const res = await fetch('/tts-cache/manifest.json');
+      if (!res.ok) { console.log('[TTS Cache] 사전 캐시 없음 (manifest.json 404)'); return; }
+      const manifest = await res.json();
+
+      await this.init();
+      if (!this.db) return;
+
+      const tx = this.db.transaction(this.storeName, 'readonly');
+      const store = tx.objectStore(this.storeName);
+
+      // 이미 캐시된 항목 수 확인
+      const countReq = store.count();
+      const existingCount = await new Promise(r => { countReq.onsuccess = () => r(countReq.result); countReq.onerror = () => r(0); });
+
+      if (existingCount >= manifest.length) {
+        console.log(`[TTS Cache] 사전 캐시 이미 로드됨 (${existingCount}개)`);
+        return;
+      }
+
+      // 캐시에 없는 항목만 추가
+      let loaded = 0;
+      for (const item of manifest) {
+        const existing = await this.get(item.question);
+        if (existing) continue;
+
+        // mp3 파일 → base64 data URL 변환
+        try {
+          const audioRes = await fetch(`/tts-cache/${item.file}`);
+          if (!audioRes.ok) continue;
+          const buffer = await audioRes.arrayBuffer();
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+          const audioUrl = `data:audio/mpeg;base64,${base64}`;
+          await this.set(item.question, item.reply, audioUrl);
+          loaded++;
+        } catch { /* skip */ }
+      }
+
+      console.log(`[TTS Cache] 사전 캐시 로드: ${loaded}개 새로 추가 (총 ${manifest.length}개)`);
+    } catch (e) {
+      console.log('[TTS Cache] 사전 캐시 로드 실패:', e.message);
+    }
   }
 };
 
@@ -2777,6 +2823,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initial render
   renderContent();
+
+  // 사전 생성 TTS 캐시 백그라운드 로드
+  TTS_CACHE.loadPreCache();
 });
 </script>
 
