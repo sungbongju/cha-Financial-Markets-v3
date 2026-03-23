@@ -2169,16 +2169,32 @@ async function stsProcessInput(text) {
 
     const cached = await TTS_CACHE.get(text);
     if (cached && cached.audioUrl) {
-      // 캐시 히트! → Humelo 고품질 음성 즉시 재생
-      console.log('[STS] ★ 캐시 히트! Humelo 즉시 재생');
+      // 캐시 히트! → Humelo 시아 즉시 재생
+      console.log('[STS] ★ 캐시 히트! 시아 즉시 재생');
       window._stsAudioQueue.onAllDone = stsFinish;
       window._stsAudioQueue.add(cached.audioUrl);
-      // 캐시된 답변으로 버블도 업데이트 (더 정확한 답변일 수 있음)
     } else {
-      // 캐시 미스 → Web Speech 즉시 재생 + Humelo 백그라운드 캐시
-      console.log('[STS] 캐시 미스 → Web Speech 즉시 + Humelo 백그라운드');
-      playWebSpeechTTS(reply, stsFinish);
-      fetchHumeloBackground(text, reply);
+      // 캐시 미스 → Humelo TTS 호출 (시아) → 캐시 저장
+      console.log('[STS] 캐시 미스 → Humelo 시아 호출 중...');
+      try {
+        const ttsRes = await fetch('/api/humelo-tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: reply, speed: 1.05, voiceName: '시아' })
+        });
+        const ttsData = await ttsRes.json();
+        if (ttsData.audioUrl) {
+          console.log('[STS] 시아 TTS OK → 캐시 저장 + 재생');
+          TTS_CACHE.set(text, reply, ttsData.audioUrl);
+          window._stsAudioQueue.onAllDone = stsFinish;
+          window._stsAudioQueue.add(ttsData.audioUrl);
+        } else {
+          throw new Error('No audioUrl');
+        }
+      } catch (e) {
+        console.warn('[STS] Humelo 실패, Web Speech 폴백:', e.message);
+        playWebSpeechTTS(reply, stsFinish);
+      }
     }
 
   } catch (err) {
