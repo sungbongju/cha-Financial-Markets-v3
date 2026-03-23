@@ -2053,10 +2053,24 @@ async function stsProcessInput(text) {
                 document.getElementById('stsTranscript').scrollTop = document.getElementById('stsTranscript').scrollHeight;
               }
               fullText += (fullText ? ' ' : '') + data.sentence;
+
+              // 클라이언트에서 직접 TTS 호출 (서버 TTS 실패 대비)
+              if (data.sentence && data.sentence.trim().length > 1) {
+                fetch('/api/humelo-tts', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ text: data.sentence, speed: 1.05, voiceName: '시아' })
+                }).then(r => r.json()).then(d => {
+                  if (d.audioUrl) {
+                    console.log('[STS] client TTS OK:', data.sentence.substring(0, 20));
+                    window._stsAudioQueue.add(d.audioUrl);
+                  }
+                }).catch(e => console.warn('[STS] client TTS fail:', e.message));
+              }
               break;
 
             case 'audio':
-              // 오디오 URL 도착 → 큐에 추가
+              // 서버 TTS 오디오 (있으면 사용)
               if (data.audioUrl) {
                 window._stsAudioQueue.add(data.audioUrl);
               }

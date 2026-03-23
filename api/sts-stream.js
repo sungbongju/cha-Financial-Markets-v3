@@ -305,7 +305,7 @@ export default async function handler(req, res) {
     let sentenceIndex = 0;     // 문장 인덱스
     let sseBuffer = '';        // SSE 라인 파싱 버퍼
     let processedLen = 0;      // rawBuffer에서 이미 처리한 길이
-    const ttsPromises = [];    // TTS 프로미스 추적
+    // TTS는 클라이언트에서 /api/humelo-tts 직접 호출
 
     // 연결 끊김 감지
     let clientDisconnected = false;
@@ -320,21 +320,9 @@ export default async function handler(req, res) {
 
     function processSentence(sentence) {
       if (!sentence || sentence.length === 0) return;
-      sendSSE(res, 'text', { sentence, index: sentenceIndex });
-      if (HUMELO_API_KEY) {
-        const idx = sentenceIndex;
-        const ttsText = applyTtsPostProcessing(sentence);
-        sendDebug('tts-start', `[${idx}] "${ttsText.substring(0, 30)}..."`);
-        const p = callHumeloTTS(ttsText, HUMELO_API_KEY, sendDebug).then(audioUrl => {
-          sendDebug('tts-result', `[${idx}] ${audioUrl ? (audioUrl.startsWith('data:') ? 'streaming OK (' + Math.round(audioUrl.length/1024) + 'KB)' : 'standard OK') : 'FAILED'}`);
-          if (!clientDisconnected && audioUrl) {
-            sendSSE(res, 'audio', { audioUrl, index: idx });
-          }
-        }).catch((err) => { sendDebug('tts-error', `[${idx}] ${err.message}`); });
-        ttsPromises.push(p);
-      } else {
-        sendDebug('tts-skip', 'HUMELO_API_KEY not set');
-      }
+      // TTS 발음 후처리 적용한 텍스트도 같이 전송 (클라이언트 TTS용)
+      const ttsText = applyTtsPostProcessing(sentence);
+      sendSSE(res, 'text', { sentence: ttsText, index: sentenceIndex });
       sentenceIndex++;
     }
 
@@ -391,8 +379,7 @@ export default async function handler(req, res) {
       processSentence(lastSentence);
     }
 
-    // 모든 TTS 완료 대기
-    await Promise.allSettled(ttsPromises);
+    // TTS는 클라이언트에서 처리하므로 서버 대기 불필요
 
     // 네비게이션 감지 (전체 응답 + 사용자 메시지 기반)
     const detectedCategory = detectCategory(message) || detectCategory(fullReply);
