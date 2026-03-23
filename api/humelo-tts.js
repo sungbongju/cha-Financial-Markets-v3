@@ -52,7 +52,7 @@ export default async function handler(req, res) {
     console.log('[humelo-tts] request:', { text: text.substring(0, 50), voiceName, emotion, lang, speed });
 
     const payload = JSON.stringify(body);
-    const ttsRes = await httpsPost('https://api.humelo.com/api/dive', {
+    const ttsRes = await httpsPost('https://agitvxptajouhvoatxio.supabase.co/functions/v1/dive-synthesize-v1', {
       'Content-Type': 'application/json',
       'X-API-Key': HUMELO_API_KEY
     }, payload);
@@ -68,8 +68,8 @@ export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(200).json({
       audioUrl: data.audioUrl,
-      duration: data.duration,
-      format: data.format || 'wav'
+      jobId: data.jobId,
+      format: data.outputFormat || 'wav_48000'
     });
   } catch (error) {
     console.error('[humelo-tts] exception:', error.message);
