@@ -75,9 +75,60 @@ function applyTtsPostProcessing(text) {
   return result;
 }
 
-// ── Humelo TTS 호출 (Standard) ──
+// ── Humelo TTS 호출 (Streaming → Standard 폴백) ──
 function callHumeloTTS(text, apiKey) {
-  return new Promise((resolve, reject) => {
+  // 스트리밍 우선 시도, 실패 시 Standard 폴백
+  return callHumeloStreamingTTS(text, apiKey).then(result => {
+    if (result) return result;
+    console.log('[TTS] Streaming 실패, Standard 폴백');
+    return callHumeloStandardTTS(text, apiKey);
+  });
+}
+
+// ── Humelo Streaming TTS (청크 바이너리 → base64 data URL) ──
+function callHumeloStreamingTTS(text, apiKey) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify({
+      text, mode: 'preset', lang: 'ko', speed: 1.05,
+      voiceName: '시아', emotion: 'neutral',
+      outputFormat: 'mp3_48000_128'
+    });
+    const url = new URL('https://prosody-api.humelo.works/api/v1/dive/stream');
+    const req = https.request({
+      hostname: url.hostname,
+      path: url.pathname,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey }
+    }, (res) => {
+      // 403 = 권한 없음, 4xx/5xx = 기타 에러 → null 반환 (폴백)
+      if (res.statusCode !== 200) {
+        console.log('[TTS Streaming] status:', res.statusCode);
+        let errData = '';
+        res.on('data', chunk => errData += chunk);
+        res.on('end', () => resolve(null));
+        return;
+      }
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => {
+        try {
+          const buffer = Buffer.concat(chunks);
+          if (buffer.length < 100) { resolve(null); return; } // 너무 작으면 에러
+          const base64 = buffer.toString('base64');
+          resolve(`data:audio/mpeg;base64,${base64}`);
+        } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(10000, () => { req.destroy(); resolve(null); });
+    req.write(body);
+    req.end();
+  });
+}
+
+// ── Humelo Standard TTS (audioUrl 반환) ──
+function callHumeloStandardTTS(text, apiKey) {
+  return new Promise((resolve) => {
     const body = JSON.stringify({
       text, mode: 'preset', lang: 'ko', speed: 1.05,
       voiceName: '시아', emotion: 'neutral'
