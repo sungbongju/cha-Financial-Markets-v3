@@ -52,7 +52,7 @@ export default async function handler(req, res) {
     console.log('[humelo-tts] request:', { text: text.substring(0, 50), voiceName, emotion, lang, speed });
 
     const payload = JSON.stringify(body);
-    const ttsRes = await httpsPost('https://console.prosody.dev/api/dive', {
+    const ttsRes = await httpsPost('https://api.humelo.com/api/dive', {
       'Content-Type': 'application/json',
       'X-API-Key': HUMELO_API_KEY
     }, payload);
