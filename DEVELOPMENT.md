@@ -466,3 +466,151 @@ var API_BASE = 'https://aiforalab.com/finmarket-api/api.php';
 - chat_history: 비어있음 (프론트 연동 미완)
 - user_logs: 비어있음 (프론트 연동 미완)
 - 한글 정상 저장 (utf8mb4)
+
+---
+
+## 13. v3 변경사항 — Humelo DIVE TTS + 엑사원 (2026-03-23)
+
+### 13.1 v2→v3 주요 변경
+
+| 항목 | v2 | v3 |
+|------|-----|-----|
+| **LLM** | 엑사원 Deep 32B | 동일 |
+| **STS TTS** | Web Speech API | **Humelo DIVE TTS (시아)** |
+| **STS 아키텍처** | 블로킹 (openai-chat → humelo-tts 순차) | **SSE 스트리밍 (sts-stream)** |
+| **TTS 캐싱** | 없음 | **IndexedDB + 사전 생성 캐시** |
+| **FTF** | HeyGen Interactive Avatar | 동일 |
+
+### 13.2 STS 아키텍처 — API 한곳 처리 + 캐시
+
+```
+[SSE 스트리밍 파이프라인]
+클라이언트 ──SSE──→ /api/sts-stream (서버)
+                      │
+                      ├─ 엑사원 스트리밍 호출 (stream: true)
+                      │   ↓ 토큰 하나씩 도착
+                      ├─ thought 태그 필터링 (stripThoughtTags)
+                      ├─ 문장 경계 감지 (detectSentenceBoundary)
+                      │   ↓ 문장 완성되면
+                      ├─ → SSE 'text' 이벤트 (자막 즉시 표시)
+                      └─ → SSE 'done' 이벤트 (전체 응답 + 네비게이션 정보)
+
+[TTS 처리 — 클라이언트]
+done 이벤트 수신
+  ├─ TTS_CACHE.get(질문) → 캐시 히트?
+  │   ├─ YES → Humelo 시아 즉시 재생 (0초 대기!)
+  │   └─ NO  → /api/humelo-tts 호출 → 시아 재생 → 캐시 저장
+  └─ Humelo 실패 시 → Web Speech API 폴백
+```
+
+### 13.3 Humelo DIVE TTS API
+
+**Standard API** (현재 사용):
+```
+POST https://agitvxptajouhvoatxio.supabase.co/functions/v1/dive-synthesize-v1
+Header: X-API-Key: {HUMELO_API_KEY}
+Body: { text, mode:"preset", voiceName:"시아", emotion:"neutral", lang:"ko", speed:1.05 }
+Response: { audioUrl, jobId, outputFormat }
+```
+
+**Streaming API** (권한 요청 중):
+```
+POST https://prosody-api.humelo.works/api/v1/dive/stream
+Header: X-API-Key: {HUMELO_API_KEY}
+Body: { text, mode:"preset", voiceName:"시아", emotion:"neutral", lang:"ko", speed:1.05, outputFormat:"mp3_48000_128" }
+Response: Transfer-Encoding: chunked, Content-Type: audio/mpeg (바이너리 청크)
+```
+
+**`/api/humelo-tts` 프록시** (Streaming 우선 → Standard 폴백):
+```javascript
+// 1차: Streaming API 시도 (0.3초 내 첫 청크)
+//   → 성공: 바이너리 → base64 data URL 반환
+//   → 실패(403/타임아웃): 폴백
+// 2차: Standard API (전체 합성 후 audioUrl 반환)
+```
+
+### 13.4 TTS 캐시 시스템
+
+**IndexedDB 캐시 구조:**
+```javascript
+TTS_CACHE = {
+  dbName: 'stsTtsCache',
+  storeName: 'audio',
+  key: 질문 텍스트 (lowercase, 공백 정규화),
+  value: { key, reply, audioUrl, ts }
+}
+```
+
+**캐시 전략:**
+1. **사전 생성 캐시 (Method A)**: 주요 Q&A 38개를 배치 스크립트로 mp3 생성 → `public/tts-cache/` → 페이지 로드 시 IndexedDB에 자동 로드
+2. **점진적 캐시 (Method B)**: 사용자 대화 중 새로운 질문 → Humelo TTS 호출 → 캐시 저장 → 동일 질문 재방문 시 즉시 재생
+
+**배치 스크립트:**
+```bash
+HUMELO_API_KEY=xxx node scripts/generate-tts-cache.js
+# → public/tts-cache/000.mp3 ~ 037.mp3
+# → public/tts-cache/manifest.json
+```
+
+### 13.5 thought 태그 처리
+
+엑사원 Deep은 `<thought>...</thought>` 태그로 사고 과정을 출력함.
+
+**서버 (sts-stream.js):**
+- `rawBuffer`에 토큰 축적 → `stripThoughtTags()` 일괄 제거
+- 토큰 경계 분할에도 안전 (불완전 태그, 공백 변형 대응)
+
+**클라이언트:**
+- `cleanTagRemnants()`: 서버에서 누출된 태그 잔여물 (`</`, `<thought>` 등) 최종 정리
+- 채팅 버블 표시 + TTS 텍스트 양쪽에 적용
+
+### 13.6 v3 API 엔드포인트 (추가분)
+
+| 엔드포인트 | 용도 |
+|-----------|------|
+| `POST /api/sts-stream` | SSE 스트리밍 (엑사원 + 문장 감지) |
+| `POST /api/humelo-tts` | Humelo TTS 프록시 (Streaming→Standard 폴백) |
+| `POST /api/openai-chat` | 엑사원 LLM 상담사 (TTT/FTF 공용) |
+
+### 13.7 환경변수 (v3)
+
+| 변수 | 용도 |
+|------|------|
+| `HUMELO_API_KEY` | Humelo DIVE TTS |
+| `HEYGEN_API_KEY` | HeyGen Interactive Avatar (FTF) |
+| `EXAONE_API_KEY` | 엑사원 (기본값: `router-key`) |
+| `EXAONE_BASE_URL` | 엑사원 엔드포인트 (기본값: `https://middleton.p-e.kr/v1`) |
+
+### 13.8 레이턴시 분석 및 최적화 현황
+
+```
+현재 STS 레이턴시 (캐시 미스):
+  엑사원 응답: ~5초 (스트리밍이지만 전체 대기)
+  Humelo Standard TTS: ~2초
+  총 체감: ~7초
+
+캐시 히트 시:
+  엑사원 응답: ~5초
+  TTS: 0초 (IndexedDB 캐시)
+  총 체감: ~5초
+
+Streaming API 권한 받으면 (목표):
+  엑사원 첫 문장: ~1.5초
+  Humelo Streaming TTS: ~0.3초
+  총 체감: ~2초 (파이프라이닝)
+```
+
+**최적화 로드맵:**
+1. ✅ API 한곳 처리 (sts-stream.js에서 LLM + 텍스트 전송)
+2. ✅ IndexedDB 캐시 (동일 질문 → 즉시 재생)
+3. ✅ 사전 생성 캐시 (배치 스크립트)
+4. ⏳ Humelo Streaming API 권한 → 0.3초 TTS
+5. ⏳ 엑사원 스트리밍 + 문장 단위 TTS 파이프라이닝 → 체감 2초
+6. ⏳ WebSocket 소켓 분리 (Middleton 서버) → Full Duplex + Interrupt
+
+### 13.9 Humelo 연락처
+
+- 안상현 (세일즈 총괄): hyun@humelo.com / 010-9560-8549
+- API Docs: https://console.humelo.com/docs
+- Console: https://console.humelo.com
+- 권한 요청: 가입 이메일 전달 → 보이스클로닝 + API + Streaming 권한 부여
