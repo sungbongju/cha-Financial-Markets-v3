@@ -1983,6 +1983,17 @@ const TTS_CACHE = {
   }
 };
 
+// ── 태그 잔여물 제거 (thought, HTML 등) ──
+function cleanTagRemnants(text) {
+  if (!text) return '';
+  return text
+    .replace(/<\/?thought[^>]*>/gi, '')   // <thought>, </thought>
+    .replace(/<\/[a-z]*>?/gi, '')          // </anything> 또는 </
+    .replace(/<[a-z][^>]*>/gi, '')         // <anything>
+    .replace(/^[\s.,:;]+/, '')             // 앞쪽 공백/구두점 정리
+    .trim();
+}
+
 // ── Web Speech TTS 즉시 재생 ──
 function playWebSpeechTTS(text, onEnd) {
   const utter = new SpeechSynthesisUtterance(text);
@@ -2107,14 +2118,16 @@ async function stsProcessInput(text) {
 
           switch (currentEvent) {
             case 'text':
-              // 문장 도착 → 자막 업데이트만 (TTS는 done에서 한 번에)
+              // 문장 도착 → 태그 정리 + 자막 업데이트 (TTS는 done에서 한 번에)
+              const cleanSentence = cleanTagRemnants(data.sentence);
+              if (!cleanSentence) break;
               if (!aiBubble) {
-                aiBubble = stsAppendBubble('assistant', data.sentence, true);
+                aiBubble = stsAppendBubble('assistant', cleanSentence, true);
               } else {
-                aiBubble.textContent += ' ' + data.sentence;
+                aiBubble.textContent += ' ' + cleanSentence;
                 document.getElementById('stsTranscript').scrollTop = document.getElementById('stsTranscript').scrollHeight;
               }
-              fullText += (fullText ? ' ' : '') + data.sentence;
+              fullText += (fullText ? ' ' : '') + cleanSentence;
               break;
 
             case 'done':
@@ -2133,7 +2146,7 @@ async function stsProcessInput(text) {
     if (aiBubble) aiBubble.classList.remove('streaming');
 
     // chatHistory 업데이트
-    const reply = doneData?.fullReply || fullText || '응답을 받지 못했어요.';
+    const reply = cleanTagRemnants(doneData?.fullReply || fullText) || '응답을 받지 못했어요.';
     chatHistory.push({ role: 'user', content: text });
     chatHistory.push({ role: 'assistant', content: reply });
     saveChat('assistant', reply, 'sts');
@@ -2183,7 +2196,7 @@ async function stsProcessInput(text) {
         body: JSON.stringify({ message: text, history: chatHistory.slice(-4), mode: 'sts' })
       });
       const data = await res.json();
-      const reply = data.reply || '응답을 받지 못했어요.';
+      const reply = cleanTagRemnants(data.reply) || '응답을 받지 못했어요.';
       chatHistory.push({ role: 'user', content: text });
       chatHistory.push({ role: 'assistant', content: reply });
       stsAppendBubble('assistant', reply);
