@@ -400,9 +400,41 @@ body {
 .sts-transcript {
   font-size: 13px;
   color: var(--text-secondary);
-  max-width: 300px;
-  min-height: 40px;
+  width: 100%;
+  max-width: 400px;
+  min-height: 60px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
+.sts-transcript .sts-msg {
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: 85%;
+  word-break: break-word;
+}
+.sts-transcript .sts-msg.user {
+  background: var(--gold);
+  color: #fff;
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+.sts-transcript .sts-msg.assistant {
+  background: #f0ebe3;
+  color: var(--text);
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+}
+.sts-transcript .sts-msg.assistant.streaming::after {
+  content: '▌';
+  animation: stsBlink 0.8s infinite;
+}
+@keyframes stsBlink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
 
 .sts-btn {
   padding: 12px 32px;
@@ -1867,124 +1899,261 @@ function scrollChat() {
 }
 
 // ═══════════════════════════════════════════
-// STS MODE — Web Speech API + Exaone
+// STS MODE — SSE 스트리밍 + AudioQueue
 // ═══════════════════════════════════════════
 let stsRecognition = null;
 let stsSpeaking = false;
 let stsRecognizing = false;
 let stsProcessing = false;
 
-// STS 입력 처리 (콘솔에서도 호출 가능: stsProcessInput('예금 알려줘'))
+// ── AudioQueue: 문장별 오디오 순차 재생 ──
+class AudioQueue {
+  constructor() { this.queue = []; this.playing = false; this.currentAudio = null; this.onAllDone = null; }
+  add(audioUrl) {
+    if (!audioUrl) return;
+    this.queue.push(audioUrl);
+    if (!this.playing) this._playNext();
+  }
+  _playNext() {
+    if (this.queue.length === 0) {
+      this.playing = false;
+      if (this.onAllDone) this.onAllDone();
+      return;
+    }
+    this.playing = true;
+    const url = this.queue.shift();
+    if (!this.currentAudio) this.currentAudio = new Audio();
+    this.currentAudio.src = url;
+    this.currentAudio.onended = () => this._playNext();
+    this.currentAudio.onerror = () => this._playNext();
+    this.currentAudio.play().catch(() => this._playNext());
+  }
+  interrupt() {
+    this.queue = [];
+    if (this.currentAudio) { this.currentAudio.pause(); this.currentAudio.currentTime = 0; }
+    this.playing = false;
+  }
+  get isPlaying() { return this.playing; }
+}
+
+window._stsAudioQueue = new AudioQueue();
+window._stsAbortController = null;
+
+// ── 자막 버블 헬퍼 ──
+function stsAppendBubble(role, text, streaming = false) {
+  const el = document.getElementById('stsTranscript');
+  const bubble = document.createElement('div');
+  bubble.className = `sts-msg ${role}${streaming ? ' streaming' : ''}`;
+  bubble.textContent = text;
+  el.appendChild(bubble);
+  el.scrollTop = el.scrollHeight;
+  return bubble;
+}
+
+function stsClearTranscript() {
+  // 최근 6개만 유지
+  const el = document.getElementById('stsTranscript');
+  while (el.children.length > 6) el.removeChild(el.firstChild);
+}
+
+// ── STS 입력 처리 — SSE 스트리밍 버전 ──
+// 콘솔에서도 호출 가능: stsProcessInput('예금 알려줘')
 async function stsProcessInput(text) {
   if (!text) return;
   console.log('[STS] processInput:', text, 'speaking:', stsSpeaking, 'processing:', stsProcessing);
 
-  // speaking 중이면 키워드 체크 → 에코 방지
-  if (stsSpeaking) {
-    if (!hasInterruptKeyword(text)) {
+  // interrupt: 진행 중인 스트림/오디오 중단
+  if (stsSpeaking || stsProcessing) {
+    if (stsSpeaking && !hasInterruptKeyword(text)) {
       console.log('[STS] 에코 무시 (키워드 없음):', text);
       return;
     }
-    // Humelo Audio 또는 Web Speech 모두 정지
+    // 스트림 취소
+    if (window._stsAbortController) { window._stsAbortController.abort(); window._stsAbortController = null; }
+    // 오디오 중단
+    window._stsAudioQueue.interrupt();
     if (window._stsAudio) { window._stsAudio.pause(); window._stsAudio.currentTime = 0; }
     speechSynthesis.cancel();
     stsSpeaking = false;
     stsProcessing = false;
-    console.log('[STS] 키워드 interrupt:', text);
-  } else if (stsProcessing) {
-    // processing 중 (GPT 대기)이면 키워드 없이도 새 입력 허용
-    stsProcessing = false;
-    console.log('[STS] 처리 중 새 입력');
+    // 스트리밍 중이던 AI 버블에서 커서 제거
+    const streamingBubble = document.querySelector('.sts-msg.assistant.streaming');
+    if (streamingBubble) streamingBubble.classList.remove('streaming');
+    console.log('[STS] interrupt');
   }
 
   stsProcessing = true;
-  const transcriptEl = document.getElementById('stsTranscript');
   const statusEl = document.getElementById('stsStatus');
-  transcriptEl.textContent = '나: ' + text;
   statusEl.textContent = '생각하고 있어요...';
   updateSTSVisual('');
   stsNavigateByText(text);
   saveChat('user', text, 'sts');
 
+  // 유저 버블 추가
+  stsClearTranscript();
+  stsAppendBubble('user', text);
+
+  // SSE 스트리밍 시도
+  const abortController = new AbortController();
+  window._stsAbortController = abortController;
+
   try {
-    const res = await fetch('/api/openai-chat', {
+    const response = await fetch('/api/sts-stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, history: chatHistory.slice(-4), mode: 'sts' })
+      body: JSON.stringify({ message: text, history: chatHistory.slice(-4) }),
+      signal: abortController.signal
     });
-    const data = await res.json();
-    const reply = data.reply || '응답을 받지 못했어요.';
 
-    chatHistory.push({ role: 'user', content: text });
-    chatHistory.push({ role: 'assistant', content: reply });
+    if (!response.ok) throw new Error('SSE stream failed: ' + response.status);
 
-    transcriptEl.textContent = 'AI: ' + reply;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuffer = '';
+    let aiBubble = null;  // AI 응답 버블 (점진적 업데이트)
+    let fullText = '';
+    let doneData = null;
+
+    stsSpeaking = true;
     statusEl.textContent = '답변하고 있어요...';
     updateSTSVisual('speaking');
-    stsNavigateByText(reply, true);
-    saveChat('assistant', reply, 'sts');
 
-    // TTS: Humelo DIVE (고품질 한국어 TTS)
-    stsSpeaking = true;
-    const ttsText = data.ttsReply || reply;
+    // AudioQueue 완료 콜백
+    window._stsAudioQueue.onAllDone = () => {
+      stsSpeaking = false;
+      stsProcessing = false;
+      statusEl.textContent = '듣고 있어요...';
+      updateSTSVisual('listening');
+      stsStartRecognition();
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      sseBuffer += decoder.decode(value, { stream: true });
+      const lines = sseBuffer.split('\n');
+      sseBuffer = lines.pop() || '';
+
+      let currentEvent = '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          let data;
+          try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+          switch (currentEvent) {
+            case 'text':
+              // 문장 도착 → 자막 업데이트
+              if (!aiBubble) {
+                aiBubble = stsAppendBubble('assistant', data.sentence, true);
+              } else {
+                aiBubble.textContent += ' ' + data.sentence;
+                document.getElementById('stsTranscript').scrollTop = document.getElementById('stsTranscript').scrollHeight;
+              }
+              fullText += (fullText ? ' ' : '') + data.sentence;
+              break;
+
+            case 'audio':
+              // 오디오 URL 도착 → 큐에 추가
+              if (data.audioUrl) {
+                window._stsAudioQueue.add(data.audioUrl);
+              }
+              break;
+
+            case 'done':
+              doneData = data;
+              break;
+
+            case 'error':
+              console.error('[STS] stream error:', data.message);
+              break;
+          }
+        }
+      }
+    }
+
+    // 스트리밍 커서 제거
+    if (aiBubble) aiBubble.classList.remove('streaming');
+
+    // chatHistory 업데이트
+    const reply = doneData?.fullReply || fullText || '응답을 받지 못했어요.';
+    chatHistory.push({ role: 'user', content: text });
+    chatHistory.push({ role: 'assistant', content: reply });
+    saveChat('assistant', reply, 'sts');
+    stsNavigateByText(reply, true);
+
+    // 네비게이션
+    if (doneData?.action === 'navigate' && doneData.categoryId) {
+      selectCategory(doneData.categoryId);
+      if (doneData.productName) selectProduct(doneData.productName);
+    }
+
+    // 오디오 큐가 비어있으면 (TTS 실패 등) 폴백
+    if (!window._stsAudioQueue.isPlaying && window._stsAudioQueue.queue.length === 0) {
+      // Web Speech 폴백
+      const utter = new SpeechSynthesisUtterance(reply);
+      utter.lang = 'ko-KR';
+      utter.rate = 1.1;
+      utter.onend = () => { stsSpeaking = false; stsProcessing = false; statusEl.textContent = '듣고 있어요...'; updateSTSVisual('listening'); stsStartRecognition(); };
+      utter.onerror = utter.onend;
+      speechSynthesis.speak(utter);
+    }
+
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      console.log('[STS] 스트림 중단됨 (interrupt)');
+      return;
+    }
+    console.error('[STS] SSE error, 블로킹 폴백:', err);
+
+    // ── 폴백: 기존 블로킹 방식 ──
     try {
+      const res = await fetch('/api/openai-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, history: chatHistory.slice(-4), mode: 'sts' })
+      });
+      const data = await res.json();
+      const reply = data.reply || '응답을 받지 못했어요.';
+      chatHistory.push({ role: 'user', content: text });
+      chatHistory.push({ role: 'assistant', content: reply });
+      stsAppendBubble('assistant', reply);
+      saveChat('assistant', reply, 'sts');
+
+      stsSpeaking = true;
+      const ttsText = data.ttsReply || reply;
       const ttsRes = await fetch('/api/humelo-tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: ttsText, speed: 1.05 })
       });
       const ttsData = await ttsRes.json();
-
       if (ttsData.audioUrl) {
-        // Humelo DIVE → URL로 Audio 재생
         if (!window._stsAudio) window._stsAudio = new Audio();
         window._stsAudio.src = ttsData.audioUrl;
-        window._stsAudio.onended = () => {
-          stsSpeaking = false;
-          stsProcessing = false;
-          statusEl.textContent = '듣고 있어요...';
-          updateSTSVisual('listening');
-          stsStartRecognition();
-        };
-        window._stsAudio.onerror = () => {
-          stsSpeaking = false;
-          stsProcessing = false;
-          statusEl.textContent = '듣고 있어요...';
-          updateSTSVisual('listening');
-          stsStartRecognition();
-        };
+        window._stsAudio.onended = () => { stsSpeaking = false; stsProcessing = false; statusEl.textContent = '듣고 있어요...'; updateSTSVisual('listening'); stsStartRecognition(); };
+        window._stsAudio.onerror = window._stsAudio.onended;
         window._stsAudio.play();
       } else {
-        // Humelo 실패 시 Web Speech API 폴백
-        console.warn('[STS] Humelo 실패, Web Speech 폴백');
         const utter = new SpeechSynthesisUtterance(ttsText);
-        utter.lang = 'ko-KR';
-        utter.rate = 1.1;
+        utter.lang = 'ko-KR'; utter.rate = 1.1;
         utter.onend = () => { stsSpeaking = false; stsProcessing = false; statusEl.textContent = '듣고 있어요...'; updateSTSVisual('listening'); stsStartRecognition(); };
-        utter.onerror = () => { stsSpeaking = false; stsProcessing = false; statusEl.textContent = '듣고 있어요...'; updateSTSVisual('listening'); stsStartRecognition(); };
+        utter.onerror = utter.onend;
         speechSynthesis.speak(utter);
       }
-    } catch (ttsErr) {
-      console.error('[STS] Humelo TTS error:', ttsErr);
-      // 폴백: Web Speech API
-      const utter = new SpeechSynthesisUtterance(ttsText);
-      utter.lang = 'ko-KR';
-      utter.rate = 1.1;
-      utter.onend = () => { stsSpeaking = false; stsProcessing = false; statusEl.textContent = '듣고 있어요...'; updateSTSVisual('listening'); stsStartRecognition(); };
-      utter.onerror = () => { stsSpeaking = false; stsProcessing = false; statusEl.textContent = '듣고 있어요...'; updateSTSVisual('listening'); stsStartRecognition(); };
-      speechSynthesis.speak(utter);
+      if (data.action === 'navigate' && data.categoryId) {
+        selectCategory(data.categoryId);
+        if (data.productName) selectProduct(data.productName);
+      }
+    } catch (fallbackErr) {
+      console.error('[STS] 폴백도 실패:', fallbackErr);
+      stsProcessing = false;
+      statusEl.textContent = '오류가 발생했어요. 다시 말씀해 주세요.';
+      updateSTSVisual('listening');
+      stsStartRecognition();
     }
-
-    if (data.action === 'navigate' && data.categoryId) {
-      selectCategory(data.categoryId);
-      if (data.productName) selectProduct(data.productName);
-    }
-  } catch (err) {
-    console.error('[STS] Exaone error:', err);
-    stsProcessing = false;
-    statusEl.textContent = '오류가 발생했어요. 다시 말씀해 주세요.';
-    updateSTSVisual('listening');
-    stsStartRecognition();
   }
 }
 
@@ -2107,6 +2276,10 @@ function updateSTSVisual(state) {
 
 function stopSTS() {
   stsActive = false;
+  // 스트림 취소
+  if (window._stsAbortController) { window._stsAbortController.abort(); window._stsAbortController = null; }
+  // 오디오 큐 중단
+  if (window._stsAudioQueue) window._stsAudioQueue.interrupt();
   if (stsRecognition) {
     stsRecognition.abort();
     stsRecognition = null;
@@ -2121,6 +2294,7 @@ function stopSTS() {
   document.getElementById('stsStartBtn').classList.remove('stop');
   document.getElementById('stsStatus').textContent = '시작 버튼을 눌러 음성 대화를 시작하세요';
   document.getElementById('stsConnectionStatus').innerHTML = '<span class="dot"></span> 대기';
+  document.getElementById('stsTranscript').innerHTML = '';
   updateSTSVisual('');
 }
 
