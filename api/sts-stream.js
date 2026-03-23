@@ -179,9 +179,22 @@ function detectSentenceBoundary(buffer) {
   return -1;
 }
 
+// ── thought 태그 제거 (토큰 경계 무관하게 안전 처리) ──
+function stripThoughtTags(text) {
+  // <thought>...</thought> 블록 전체 제거
+  let result = text.replace(/<thought>[\s\S]*?<\/thought>/gi, '');
+  // 열린 <thought> 태그만 남은 경우 (닫히지 않음) → 이후 전부 제거
+  result = result.replace(/<thought>[\s\S]*/gi, '');
+  // 닫는 태그만 남은 경우
+  result = result.replace(/<\/thought>/gi, '');
+  return result.trim();
+}
+
 // ── SSE 헬퍼 ──
 function sendSSE(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  // Vercel SSE 버퍼링 방지
+  if (typeof res.flush === 'function') res.flush();
 }
 
 // ── 메인 핸들러 ──
@@ -243,17 +256,34 @@ export default async function handler(req, res) {
     const reader = exaResponse.body.getReader();
     const decoder = new TextDecoder();
 
-    let contentBuffer = '';     // 현재 문장 버퍼
-    let fullReply = '';         // 전체 응답
+    let rawBuffer = '';         // 엑사원 전체 raw 응답 (thought 포함)
+    let contentBuffer = '';     // 현재 문장 버퍼 (thought 제거 후)
+    let fullReply = '';         // 전체 응답 (thought 제거 후)
     let sentenceIndex = 0;     // 문장 인덱스
-    let inThought = false;     // <thought> 태그 내부 여부
-    let thoughtBuffer = '';    // thought 버퍼
     let sseBuffer = '';        // SSE 라인 파싱 버퍼
+    let processedLen = 0;      // rawBuffer에서 이미 처리한 길이
     const ttsPromises = [];    // TTS 프로미스 추적
 
     // 연결 끊김 감지
     let clientDisconnected = false;
     req.on('close', () => { clientDisconnected = true; });
+
+    // 문장 처리 헬퍼
+    function processSentence(sentence) {
+      if (!sentence || sentence.length === 0) return;
+      sendSSE(res, 'text', { sentence, index: sentenceIndex });
+      if (HUMELO_API_KEY) {
+        const idx = sentenceIndex;
+        const ttsText = applyTtsPostProcessing(sentence);
+        const p = callHumeloTTS(ttsText, HUMELO_API_KEY).then(audioUrl => {
+          if (!clientDisconnected && audioUrl) {
+            sendSSE(res, 'audio', { audioUrl, index: idx });
+          }
+        }).catch(() => {});
+        ttsPromises.push(p);
+      }
+      sentenceIndex++;
+    }
 
     while (true) {
       if (clientDisconnected) break;
@@ -275,73 +305,34 @@ export default async function handler(req, res) {
         const token = parsed.choices?.[0]?.delta?.content;
         if (!token) continue;
 
-        // <thought> 태그 필터링
-        if (!inThought && (thoughtBuffer + token).includes('<thought>')) {
-          inThought = true;
-          thoughtBuffer += token;
-          continue;
-        }
-        if (inThought) {
-          thoughtBuffer += token;
-          if (thoughtBuffer.includes('</thought>')) {
-            // thought 끝 — </thought> 이후 텍스트 추출
-            const afterThought = thoughtBuffer.split('</thought>').pop().trim();
-            inThought = false;
-            thoughtBuffer = '';
-            if (afterThought) contentBuffer += afterThought;
-          }
-          continue;
-        }
+        // raw 버퍼에 토큰 축적
+        rawBuffer += token;
 
-        contentBuffer += token;
-        fullReply += token;
+        // thought 태그 안전 제거 (토큰 경계 무관)
+        const cleaned = stripThoughtTags(rawBuffer);
 
-        // 문장 경계 감지
-        const boundary = detectSentenceBoundary(contentBuffer);
-        if (boundary > 0) {
+        // 새로 추가된 클린 텍스트만 추출
+        const newText = cleaned.substring(processedLen);
+        if (!newText) continue;
+
+        contentBuffer += newText;
+        fullReply += newText;
+        processedLen = cleaned.length;
+
+        // 문장 경계 감지 → 즉시 전송 + TTS
+        let boundary;
+        while ((boundary = detectSentenceBoundary(contentBuffer)) > 0) {
           const sentence = contentBuffer.substring(0, boundary).trim();
           contentBuffer = contentBuffer.substring(boundary).trim();
-
-          if (sentence.length > 0) {
-            // text 이벤트 즉시 전송
-            sendSSE(res, 'text', { sentence, index: sentenceIndex });
-
-            // Humelo TTS 비동기 호출
-            if (HUMELO_API_KEY) {
-              const idx = sentenceIndex;
-              const ttsText = applyTtsPostProcessing(sentence);
-              const p = callHumeloTTS(ttsText, HUMELO_API_KEY).then(audioUrl => {
-                if (!clientDisconnected) {
-                  sendSSE(res, 'audio', { audioUrl, index: idx });
-                }
-              });
-              ttsPromises.push(p);
-            }
-
-            sentenceIndex++;
-          }
+          processSentence(sentence);
         }
       }
     }
 
     // 버퍼에 남은 텍스트 처리 (마지막 문장)
-    if (contentBuffer.trim().length > 0) {
-      const sentence = contentBuffer.trim();
-      fullReply += (fullReply.endsWith(sentence) ? '' : '');
-
-      sendSSE(res, 'text', { sentence, index: sentenceIndex });
-
-      if (HUMELO_API_KEY) {
-        const idx = sentenceIndex;
-        const ttsText = applyTtsPostProcessing(sentence);
-        const p = callHumeloTTS(ttsText, HUMELO_API_KEY).then(audioUrl => {
-          if (!clientDisconnected) {
-            sendSSE(res, 'audio', { audioUrl, index: idx });
-          }
-        });
-        ttsPromises.push(p);
-      }
-      sentenceIndex++;
+    const lastSentence = contentBuffer.trim();
+    if (lastSentence.length > 0) {
+      processSentence(lastSentence);
     }
 
     // 모든 TTS 완료 대기
