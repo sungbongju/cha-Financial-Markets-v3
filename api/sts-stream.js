@@ -1,6 +1,5 @@
 // api/sts-stream.js — SSE 스트리밍 엔드포인트
-// 엑사원 스트리밍 + 한국어 문장 감지 + Humelo TTS 병렬 호출
-import https from 'https';
+// 엑사원 스트리밍 + 한국어 문장 감지 + Humelo TTS
 
 // ── 카테고리/상품 데이터 (openai-chat.js에서 복사) ──
 const CATEGORIES = {
@@ -76,86 +75,71 @@ function applyTtsPostProcessing(text) {
 }
 
 // ── Humelo TTS 호출 (Streaming → Standard 폴백) ──
-function callHumeloTTS(text, apiKey, sendDebug) {
-  // 스트리밍 우선 시도 (3초 제한), 실패 시 Standard 폴백
-  return callHumeloStreamingTTS(text, apiKey).then(result => {
-    if (result) { if (sendDebug) sendDebug('tts-mode', 'streaming'); return result; }
-    if (sendDebug) sendDebug('tts-fallback', 'streaming→standard');
-    return callHumeloStandardTTS(text, apiKey);
-  }).then(result => {
-    if (!result && sendDebug) sendDebug('tts-fail', 'both failed for: ' + text.substring(0, 30));
-    return result;
-  });
+async function callHumeloTTS(text, apiKey, sendDebug) {
+  if (!text || text.trim().length === 0) return null;
+
+  // 1차: Streaming 시도
+  try {
+    const result = await callHumeloStreamingTTS(text, apiKey);
+    if (result) { if (sendDebug) sendDebug('tts-mode', 'streaming OK'); return result; }
+  } catch (e) { if (sendDebug) sendDebug('tts-streaming-err', e.message); }
+
+  // 2차: Standard 폴백
+  if (sendDebug) sendDebug('tts-fallback', 'streaming→standard');
+  try {
+    const result = await callHumeloStandardTTS(text, apiKey);
+    if (result) { if (sendDebug) sendDebug('tts-mode', 'standard OK'); return result; }
+  } catch (e) { if (sendDebug) sendDebug('tts-standard-err', e.message); }
+
+  if (sendDebug) sendDebug('tts-fail', 'both failed: ' + text.substring(0, 30));
+  return null;
 }
 
-// ── Humelo Streaming TTS (청크 바이너리 → base64 data URL) ──
-function callHumeloStreamingTTS(text, apiKey) {
-  return new Promise((resolve) => {
-    const body = JSON.stringify({
-      text, mode: 'preset', lang: 'ko', speed: 1.05,
-      voiceName: '시아', emotion: 'neutral',
-      outputFormat: 'mp3_48000_128'
-    });
-    const url = new URL('https://prosody-api.humelo.works/api/v1/dive/stream');
-    const req = https.request({
-      hostname: url.hostname,
-      path: url.pathname,
+// ── Humelo Streaming TTS (fetch, 청크 바이너리 → base64 data URL) ──
+async function callHumeloStreamingTTS(text, apiKey) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+  try {
+    const res = await fetch('https://prosody-api.humelo.works/api/v1/dive/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey }
-    }, (res) => {
-      // 403 = 권한 없음, 4xx/5xx = 기타 에러 → null 반환 (폴백)
-      if (res.statusCode !== 200) {
-        console.log('[TTS Streaming] status:', res.statusCode);
-        let errData = '';
-        res.on('data', chunk => errData += chunk);
-        res.on('end', () => resolve(null));
-        return;
-      }
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => {
-        try {
-          const buffer = Buffer.concat(chunks);
-          if (buffer.length < 100) { resolve(null); return; } // 너무 작으면 에러
-          const base64 = buffer.toString('base64');
-          resolve(`data:audio/mpeg;base64,${base64}`);
-        } catch { resolve(null); }
-      });
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+      body: JSON.stringify({
+        text, mode: 'preset', lang: 'ko', speed: 1.05,
+        voiceName: '시아', emotion: 'neutral',
+        outputFormat: 'mp3_48000_128'
+      }),
+      signal: controller.signal
     });
-    req.on('error', (err) => { console.log('[TTS Streaming] error:', err.message); resolve(null); });
-    req.setTimeout(3000, () => { console.log('[TTS Streaming] timeout 3s'); req.destroy(); resolve(null); });
-    req.write(body);
-    req.end();
-  });
+    clearTimeout(timeoutId);
+    if (!res.ok) { console.log('[TTS Streaming] status:', res.status); return null; }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length < 100) return null;
+    return `data:audio/mpeg;base64,${buffer.toString('base64')}`;
+  } catch (e) {
+    clearTimeout(timeoutId);
+    console.log('[TTS Streaming] error:', e.message);
+    return null;
+  }
 }
 
-// ── Humelo Standard TTS (audioUrl 반환) ──
-function callHumeloStandardTTS(text, apiKey) {
-  return new Promise((resolve) => {
-    const body = JSON.stringify({
-      text, mode: 'preset', lang: 'ko', speed: 1.05,
-      voiceName: '시아', emotion: 'neutral'
-    });
-    const url = new URL('https://agitvxptajouhvoatxio.supabase.co/functions/v1/dive-synthesize-v1');
-    const req = https.request({
-      hostname: url.hostname,
-      path: url.pathname,
+// ── Humelo Standard TTS (fetch, audioUrl 반환) ──
+async function callHumeloStandardTTS(text, apiKey) {
+  try {
+    const res = await fetch('https://agitvxptajouhvoatxio.supabase.co/functions/v1/dive-synthesize-v1', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey }
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          resolve(parsed.audioUrl || null);
-        } catch { resolve(null); }
-      });
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+      body: JSON.stringify({
+        text, mode: 'preset', lang: 'ko', speed: 1.05,
+        voiceName: '시아', emotion: 'neutral'
+      })
     });
-    req.on('error', () => resolve(null));
-    req.write(body);
-    req.end();
-  });
+    if (!res.ok) { console.log('[TTS Standard] status:', res.status, await res.text()); return null; }
+    const data = await res.json();
+    return data.audioUrl || null;
+  } catch (e) {
+    console.log('[TTS Standard] error:', e.message);
+    return null;
+  }
 }
 
 // ── 스트리밍 STS 프롬프트 (JSON 없이 평문 출력) ──
@@ -235,13 +219,15 @@ function detectSentenceBoundary(buffer) {
 
 // ── thought 태그 제거 (토큰 경계 무관하게 안전 처리) ──
 function stripThoughtTags(text) {
-  // <thought>...</thought> 블록 전체 제거
-  let result = text.replace(/<thought>[\s\S]*?<\/thought>/gi, '');
-  // 열린 <thought> 태그만 남은 경우 (닫히지 않음) → 이후 전부 제거
-  result = result.replace(/<thought>[\s\S]*/gi, '');
-  // 닫는 태그만 남은 경우
-  result = result.replace(/<\/thought>/gi, '');
-  return result.trim();
+  // 1. <thought>...</thought> 블록 전체 제거 (멀티라인)
+  let result = text.replace(/<\s*thought\s*>[\s\S]*?<\s*\/\s*thought\s*>/gi, '');
+  // 2. 열린 <thought> 태그만 남은 경우 (닫히지 않음) → 이후 전부 제거
+  result = result.replace(/<\s*thought\s*>[\s\S]*/gi, '');
+  // 3. 닫는 태그만 남은 경우 (다양한 형식 대응)
+  result = result.replace(/<\s*\/\s*thought\s*>/gi, '');
+  // 4. 불완전한 태그 잔여물 (<thought, </thought 등)
+  result = result.replace(/<\s*\/?\s*thought\b[^>]*/gi, '');
+  return result;
 }
 
 // ── SSE 헬퍼 ──
@@ -376,15 +362,18 @@ export default async function handler(req, res) {
         rawBuffer += token;
 
         // thought 태그 안전 제거 (토큰 경계 무관)
+        // thought 태그 안전 제거 (토큰 경계 무관)
         const cleaned = stripThoughtTags(rawBuffer);
+        // 앞쪽 공백 제거 (일관된 processedLen 추적)
+        const trimmedCleaned = cleaned.replace(/^\s+/, '');
 
         // 새로 추가된 클린 텍스트만 추출
-        const newText = cleaned.substring(processedLen);
+        const newText = trimmedCleaned.substring(processedLen);
         if (!newText) continue;
 
         contentBuffer += newText;
         fullReply += newText;
-        processedLen = cleaned.length;
+        processedLen = trimmedCleaned.length;
 
         // 문장 경계 감지 → 즉시 전송 + TTS
         let boundary;
