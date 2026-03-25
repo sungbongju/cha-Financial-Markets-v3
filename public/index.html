@@ -2176,13 +2176,16 @@ async function stsProcessInput(text) {
               fullText += (fullText ? ' ' : '') + cleanSentence;
               // ★ 문장 단위 파이프라이닝: 즉시 TTS 호출 → AudioQueue에 추가
               if (cleanSentence.length > 2) {
+                if (!window._stsTtsPending) window._stsTtsPending = 0;
+                window._stsTtsPending++;
                 fetch('/api/humelo-tts', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ text: cleanSentence, speed: 1.05, voiceName: '시아' })
                 }).then(r => r.json()).then(d => {
+                  window._stsTtsPending--;
                   if (d.audioUrl) window._stsAudioQueue.add(d.audioUrl);
-                }).catch(() => {});
+                }).catch(() => { window._stsTtsPending--; });
               }
               break;
 
@@ -2241,12 +2244,19 @@ async function stsProcessInput(text) {
     }
 
     // AudioQueue가 비어있으면 (TTS 전부 실패 등) Web Speech 폴백
-    setTimeout(() => {
+    // TTS pending 완료 후 체크 (최대 15초 대기)
+    const checkFallback = () => {
+      const pending = window._stsTtsPending || 0;
+      if (pending > 0) {
+        setTimeout(checkFallback, 1000);
+        return;
+      }
       if (!window._stsAudioQueue.isPlaying && window._stsAudioQueue.queue.length === 0 && stsSpeaking) {
-        console.warn('[STS] TTS 없음, Web Speech 폴백');
+        console.warn('[STS] TTS 전부 실패, Web Speech 폴백');
         playWebSpeechTTS(reply, stsFinish);
       }
-    }, 3000);
+    };
+    setTimeout(checkFallback, 5000);
 
   } catch (err) {
     if (err.name === 'AbortError') {
