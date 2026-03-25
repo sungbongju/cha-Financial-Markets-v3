@@ -2164,7 +2164,7 @@ async function stsProcessInput(text) {
 
           switch (currentEvent) {
             case 'text':
-              // 문장 도착 → 태그 정리 + 자막 업데이트 (TTS는 done에서 한 번에)
+              // 문장 도착 → 태그 정리 + 자막 업데이트 + 즉시 TTS 호출!
               const cleanSentence = cleanTagRemnants(data.sentence);
               if (!cleanSentence) break;
               if (!aiBubble) {
@@ -2174,6 +2174,16 @@ async function stsProcessInput(text) {
                 document.getElementById('stsTranscript').scrollTop = document.getElementById('stsTranscript').scrollHeight;
               }
               fullText += (fullText ? ' ' : '') + cleanSentence;
+              // ★ 문장 단위 파이프라이닝: 즉시 TTS 호출 → AudioQueue에 추가
+              if (cleanSentence.length > 2) {
+                fetch('/api/humelo-tts', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ text: cleanSentence, speed: 1.05, voiceName: '시아' })
+                }).then(r => r.json()).then(d => {
+                  if (d.audioUrl) window._stsAudioQueue.add(d.audioUrl);
+                }).catch(() => {});
+              }
               break;
 
             case 'done':
@@ -2204,7 +2214,7 @@ async function stsProcessInput(text) {
       if (doneData.productName) selectProduct(doneData.productName);
     }
 
-    // ── TTS: 캐시 히트 → Humelo 즉시 / 미스 → Web Speech 즉시 + Humelo 백그라운드 ──
+    // ── 문장 단위 파이프라이닝: TTS는 text 이벤트에서 이미 호출됨 ──
     const stsFinish = () => {
       stsSpeaking = false;
       stsProcessing = false;
@@ -2213,35 +2223,30 @@ async function stsProcessInput(text) {
       stsStartRecognition();
     };
 
-    const cached = await TTS_CACHE.get(text);
-    if (cached && cached.audioUrl) {
-      // 캐시 히트! → Humelo 시아 즉시 재생
-      console.log('[STS] ★ 캐시 히트! 시아 즉시 재생');
-      window._stsAudioQueue.onAllDone = stsFinish;
-      window._stsAudioQueue.add(cached.audioUrl);
-    } else {
-      // 캐시 미스 → Humelo TTS 호출 (시아) → 캐시 저장
-      console.log('[STS] 캐시 미스 → Humelo 시아 호출 중...');
-      try {
-        const ttsRes = await fetch('/api/humelo-tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: reply, speed: 1.05, voiceName: '시아' })
-        });
-        const ttsData = await ttsRes.json();
-        if (ttsData.audioUrl) {
-          console.log('[STS] 시아 TTS OK → 캐시 저장 + 재생');
-          TTS_CACHE.set(text, reply, ttsData.audioUrl);
-          window._stsAudioQueue.onAllDone = stsFinish;
-          window._stsAudioQueue.add(ttsData.audioUrl);
-        } else {
-          throw new Error('No audioUrl');
+    // AudioQueue 완료 시 상태 정리
+    window._stsAudioQueue.onAllDone = stsFinish;
+
+    // 캐시에 전체 응답 저장 (다음 동일 질문 시 즉시 재생용)
+    if (reply && fullText) {
+      fetch('/api/humelo-tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: reply, speed: 1.05, voiceName: '시아' })
+      }).then(r => r.json()).then(d => {
+        if (d.audioUrl) {
+          TTS_CACHE.set(text, reply, d.audioUrl);
+          console.log('[STS] 캐시 저장 완료 (백그라운드)');
         }
-      } catch (e) {
-        console.warn('[STS] Humelo 실패, Web Speech 폴백:', e.message);
+      }).catch(() => {});
+    }
+
+    // AudioQueue가 비어있으면 (TTS 전부 실패 등) Web Speech 폴백
+    setTimeout(() => {
+      if (!window._stsAudioQueue.isPlaying && window._stsAudioQueue.queue.length === 0 && stsSpeaking) {
+        console.warn('[STS] TTS 없음, Web Speech 폴백');
         playWebSpeechTTS(reply, stsFinish);
       }
-    }
+    }, 3000);
 
   } catch (err) {
     if (err.name === 'AbortError') {
