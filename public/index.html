@@ -2174,18 +2174,14 @@ async function stsProcessInput(text) {
                 document.getElementById('stsTranscript').scrollTop = document.getElementById('stsTranscript').scrollHeight;
               }
               fullText += (fullText ? ' ' : '') + cleanSentence;
-              // ★ 문장 단위 파이프라이닝: 즉시 TTS 호출 → AudioQueue에 추가
+              // ★ 문장 단위 파이프라이닝: Humelo 스트리밍 프록시로 즉시 재생
               if (cleanSentence.length > 2) {
                 if (!window._stsTtsPending) window._stsTtsPending = 0;
                 window._stsTtsPending++;
-                fetch('/api/humelo-tts', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ text: cleanSentence, speed: 1.05, voiceName: '시아' })
-                }).then(r => r.json()).then(d => {
-                  window._stsTtsPending--;
-                  if (d.audioUrl) window._stsAudioQueue.add(d.audioUrl);
-                }).catch(() => { window._stsTtsPending--; });
+                const streamUrl = '/api/humelo-tts-stream?text=' + encodeURIComponent(cleanSentence) + '&voiceName=시아&speed=1.05';
+                // 스트리밍 오디오 → AudioQueue에 URL로 추가 (브라우저가 청크 도착 즉시 재생)
+                window._stsAudioQueue.add(streamUrl);
+                window._stsTtsPending--;
               }
               break;
 
