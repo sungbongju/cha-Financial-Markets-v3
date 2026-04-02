@@ -476,7 +476,7 @@ var API_BASE = 'https://aiforalab.com/finmarket-api/api.php';
 | 항목 | v2 | v3 |
 |------|-----|-----|
 | **LLM** | 엑사원 Deep 32B | 동일 |
-| **STS TTS** | Web Speech API | **Humelo DIVE TTS (시아)** |
+| **STS TTS** | Web Speech API | **Humelo DIVE TTS (나나)** |
 | **STS 아키텍처** | 블로킹 (openai-chat → humelo-tts 순차) | **SSE 스트리밍 (sts-stream)** |
 | **TTS 캐싱** | 없음 | **IndexedDB + 사전 생성 캐시** |
 | **FTF** | HeyGen Interactive Avatar | 동일 |
@@ -498,8 +498,8 @@ var API_BASE = 'https://aiforalab.com/finmarket-api/api.php';
 [TTS 처리 — 클라이언트]
 done 이벤트 수신
   ├─ TTS_CACHE.get(질문) → 캐시 히트?
-  │   ├─ YES → Humelo 시아 즉시 재생 (0초 대기!)
-  │   └─ NO  → /api/humelo-tts 호출 → 시아 재생 → 캐시 저장
+  │   ├─ YES → Humelo 나나 즉시 재생 (0초 대기!)
+  │   └─ NO  → /api/humelo-tts 호출 → 나나 재생 → 캐시 저장
   └─ Humelo 실패 시 → Web Speech API 폴백
 ```
 
@@ -509,7 +509,7 @@ done 이벤트 수신
 ```
 POST https://agitvxptajouhvoatxio.supabase.co/functions/v1/dive-synthesize-v1
 Header: X-API-Key: {HUMELO_API_KEY}
-Body: { text, mode:"preset", voiceName:"시아", emotion:"neutral", lang:"ko", speed:1.05 }
+Body: { text, mode:"preset", voiceName:"나나", emotion:"neutral", lang:"ko", speed:1.05 }
 Response: { audioUrl, jobId, outputFormat }
 ```
 
@@ -517,7 +517,7 @@ Response: { audioUrl, jobId, outputFormat }
 ```
 POST https://prosody-api.humelo.works/api/v1/dive/stream
 Header: X-API-Key: {HUMELO_API_KEY}
-Body: { text, mode:"preset", voiceName:"시아", emotion:"neutral", lang:"ko", speed:1.05, outputFormat:"mp3_48000_128" }
+Body: { text, mode:"preset", voiceName:"나나", emotion:"neutral", lang:"ko", speed:1.05, outputFormat:"mp3_48000_128" }
 Response: Transfer-Encoding: chunked, Content-Type: audio/mpeg (바이너리 청크)
 ```
 

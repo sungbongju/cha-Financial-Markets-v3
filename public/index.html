@@ -1905,6 +1905,7 @@ let stsRecognition = null;
 let stsSpeaking = false;
 let stsRecognizing = false;
 let stsProcessing = false;
+const HUMELO_VOICE_NAME = '나나';
 
 // ── AudioQueue: 문장별 오디오 순차 재생 ──
 class AudioQueue {
@@ -1941,7 +1942,7 @@ window._stsAbortController = null;
 
 // ── TTS 캐시 (IndexedDB) ──
 const TTS_CACHE = {
-  dbName: 'stsTtsCache',
+  dbName: 'stsTtsCache_nana_v1',
   storeName: 'audio',
   db: null,
 
@@ -1958,8 +1959,9 @@ const TTS_CACHE = {
   },
 
   _makeKey(question) {
-    // 사용자 질문 기반 키 (같은 질문 → 캐시 히트)
-    return (question || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    // 음성별로 캐시를 분리해서 기존 음성이 재사용되지 않게 함
+    const q = (question || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    return `${HUMELO_VOICE_NAME}::${q}`;
   },
 
   async get(question) {
@@ -2056,7 +2058,7 @@ function fetchHumeloBackground(question, reply) {
   fetch('/api/humelo-tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: reply, speed: 1.05, voiceName: '시아' })
+    body: JSON.stringify({ text: reply, speed: 1.05, voiceName: HUMELO_VOICE_NAME })
   }).then(r => r.json()).then(d => {
     if (d.audioUrl) {
       TTS_CACHE.set(question, reply, d.audioUrl);
@@ -2178,7 +2180,7 @@ async function stsProcessInput(text) {
               if (cleanSentence.length > 2) {
                 if (!window._stsTtsPending) window._stsTtsPending = 0;
                 window._stsTtsPending++;
-                const streamUrl = '/api/humelo-tts-stream?text=' + encodeURIComponent(cleanSentence) + '&voiceName=시아&speed=1.05';
+                const streamUrl = '/api/humelo-tts-stream?text=' + encodeURIComponent(cleanSentence) + '&voiceName=' + encodeURIComponent(HUMELO_VOICE_NAME) + '&speed=1.05';
                 // 스트리밍 오디오 → AudioQueue에 URL로 추가 (브라우저가 청크 도착 즉시 재생)
                 window._stsAudioQueue.add(streamUrl);
                 window._stsTtsPending--;
@@ -2230,7 +2232,7 @@ async function stsProcessInput(text) {
       fetch('/api/humelo-tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: reply, speed: 1.05, voiceName: '시아' })
+        body: JSON.stringify({ text: reply, speed: 1.05, voiceName: HUMELO_VOICE_NAME })
       }).then(r => r.json()).then(d => {
         if (d.audioUrl) {
           TTS_CACHE.set(text, reply, d.audioUrl);

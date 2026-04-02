@@ -90,7 +90,7 @@ async function callHumeloTTS(text) {
     headers: { 'Content-Type': 'application/json', 'X-API-Key': HUMELO_API_KEY },
     body: JSON.stringify({
       text, mode: 'preset', lang: 'ko', speed: 1.05,
-      voiceName: '시아', emotion: 'neutral'
+      voiceName: '나나', emotion: 'neutral'
     })
   });
   if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
