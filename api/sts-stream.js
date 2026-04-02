@@ -105,7 +105,7 @@ async function callHumeloStreamingTTS(text, apiKey) {
       headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
       body: JSON.stringify({
         text, mode: 'preset', lang: 'ko', speed: 1.05,
-        voiceName: '나나', emotion: 'happy',
+        voiceName: '나나', emotion: 'neutral',
         outputFormat: 'mp3_48000_128'
       }),
       signal: controller.signal
@@ -130,7 +130,7 @@ async function callHumeloStandardTTS(text, apiKey) {
       headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
       body: JSON.stringify({
         text, mode: 'preset', lang: 'ko', speed: 1.05,
-        voiceName: '나나', emotion: 'happy'
+        voiceName: '나나', emotion: 'neutral'
       })
     });
     if (!res.ok) { console.log('[TTS Standard] status:', res.status, await res.text()); return null; }
