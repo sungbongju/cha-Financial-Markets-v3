@@ -18,9 +18,9 @@ export default async function handler(req, res) {
     text = req.query.text;
     voiceName = req.query.voiceName || '나나';
     speed = parseFloat(req.query.speed) || 1.05;
-    emotion = req.query.emotion || 'neutral';
+    emotion = req.query.emotion || 'happy';
   } else {
-    ({ text, voiceName = '나나', speed = 1.05, emotion = 'neutral' } = req.body || {});
+    ({ text, voiceName = '나나', speed = 1.05, emotion = 'happy' } = req.body || {});
   }
 
   if (!text) return res.status(400).json({ error: 'text required' });

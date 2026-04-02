@@ -509,7 +509,7 @@ done 이벤트 수신
 ```
 POST https://agitvxptajouhvoatxio.supabase.co/functions/v1/dive-synthesize-v1
 Header: X-API-Key: {HUMELO_API_KEY}
-Body: { text, mode:"preset", voiceName:"나나", emotion:"neutral", lang:"ko", speed:1.05 }
+Body: { text, mode:"preset", voiceName:"나나", emotion:"happy", lang:"ko", speed:1.05 }
 Response: { audioUrl, jobId, outputFormat }
 ```
 
@@ -517,7 +517,7 @@ Response: { audioUrl, jobId, outputFormat }
 ```
 POST https://prosody-api.humelo.works/api/v1/dive/stream
 Header: X-API-Key: {HUMELO_API_KEY}
-Body: { text, mode:"preset", voiceName:"나나", emotion:"neutral", lang:"ko", speed:1.05, outputFormat:"mp3_48000_128" }
+Body: { text, mode:"preset", voiceName:"나나", emotion:"happy", lang:"ko", speed:1.05, outputFormat:"mp3_48000_128" }
 Response: Transfer-Encoding: chunked, Content-Type: audio/mpeg (바이너리 청크)
 ```
 

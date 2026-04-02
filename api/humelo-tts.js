@@ -21,7 +21,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { text, speed = 1.0, pitch = 0.0, volume = 50, voiceName = '나나', emotion = 'neutral', lang = 'ko', dictionaryId, streaming = true } = req.body || {};
+    const { text, speed = 1.0, pitch = 0.0, volume = 50, voiceName = '나나', emotion = 'happy', lang = 'ko', dictionaryId, streaming = true } = req.body || {};
 
     if (!text) {
       return res.status(400).json({ error: 'text is required' });

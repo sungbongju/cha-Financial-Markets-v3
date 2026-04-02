@@ -1906,6 +1906,7 @@ let stsSpeaking = false;
 let stsRecognizing = false;
 let stsProcessing = false;
 const HUMELO_VOICE_NAME = '나나';
+const HUMELO_EMOTION = 'happy';
 
 // ── AudioQueue: 문장별 오디오 순차 재생 ──
 class AudioQueue {
@@ -2058,7 +2059,7 @@ function fetchHumeloBackground(question, reply) {
   fetch('/api/humelo-tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: reply, speed: 1.05, voiceName: HUMELO_VOICE_NAME })
+    body: JSON.stringify({ text: reply, speed: 1.05, voiceName: HUMELO_VOICE_NAME, emotion: HUMELO_EMOTION })
   }).then(r => r.json()).then(d => {
     if (d.audioUrl) {
       TTS_CACHE.set(question, reply, d.audioUrl);
@@ -2180,7 +2181,7 @@ async function stsProcessInput(text) {
               if (cleanSentence.length > 2) {
                 if (!window._stsTtsPending) window._stsTtsPending = 0;
                 window._stsTtsPending++;
-                const streamUrl = '/api/humelo-tts-stream?text=' + encodeURIComponent(cleanSentence) + '&voiceName=' + encodeURIComponent(HUMELO_VOICE_NAME) + '&speed=1.05';
+                const streamUrl = '/api/humelo-tts-stream?text=' + encodeURIComponent(cleanSentence) + '&voiceName=' + encodeURIComponent(HUMELO_VOICE_NAME) + '&emotion=' + encodeURIComponent(HUMELO_EMOTION) + '&speed=1.05';
                 // 스트리밍 오디오 → AudioQueue에 URL로 추가 (브라우저가 청크 도착 즉시 재생)
                 window._stsAudioQueue.add(streamUrl);
                 window._stsTtsPending--;
@@ -2232,7 +2233,7 @@ async function stsProcessInput(text) {
       fetch('/api/humelo-tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: reply, speed: 1.05, voiceName: HUMELO_VOICE_NAME })
+        body: JSON.stringify({ text: reply, speed: 1.05, voiceName: HUMELO_VOICE_NAME, emotion: HUMELO_EMOTION })
       }).then(r => r.json()).then(d => {
         if (d.audioUrl) {
           TTS_CACHE.set(text, reply, d.audioUrl);
