@@ -2109,6 +2109,11 @@ async function stsProcessInput(text) {
     const streamingBubble = document.querySelector('.sts-msg.assistant.streaming');
     if (streamingBubble) streamingBubble.classList.remove('streaming');
     console.log('[STS] interrupt');
+    // interrupt 키워드를 새 질문으로 보내지 않음 — 중단만 하고 끝!
+    statusEl.textContent = '듣고 있어요...';
+    updateSTSVisual('listening');
+    stsStartRecognition();
+    return;
   }
 
   stsProcessing = true;
@@ -2584,8 +2589,13 @@ async function ftfProcessInput(text) {
     }
     console.log('[FTF] 키워드 interrupt:', text);
     await ftfInterrupt();
+    // interrupt 키워드를 새 질문으로 보내지 않음 — 중단만 하고 끝!
+    setFTFState('listening');
+    if (ftfAutoListen && ftfSessionInfo) ftfStartListening();
+    return;
   } else if (ftfIsProcessing) {
     await ftfInterrupt();
+    return;
   }
 
   ftfIsProcessing = true;
